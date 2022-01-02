@@ -120,7 +120,7 @@ hlBool CGCFFile::MapDataStructures()
 		return hlFalse;
 	}
 
-	if(this->pHeader->uiMajorVersion != 1 || (this->pHeader->uiMinorVersion != 3 && this->pHeader->uiMinorVersion != 5 && this->pHeader->uiMinorVersion != 6))
+	if(this->pHeader->uiMajorVersion != 1 || (this->pHeader->uiMinorVersion != 1 && this->pHeader->uiMinorVersion != 3 && this->pHeader->uiMinorVersion != 5 && this->pHeader->uiMinorVersion != 6))
 	{
 		LastError.SetErrorMessageFormated("Invalid GCF version (v%u): you have a version of a GCF file that HLLib does not know how to read. Check for product updates.", this->pHeader->uiMinorVersion);
 		return hlFalse;
@@ -170,13 +170,26 @@ hlBool CGCFFile::MapDataStructures()
 	}
 	this->pDirectoryHeader = (GCFDirectoryHeader *)this->pHeaderView->GetView();
 
-	uiHeaderSize += this->pDirectoryHeader->uiDirectorySize;/*sizeof(GCFDirectoryHeader);
-				 + this->pDirectoryHeader->uiItemCount * sizeof(GCFDirectoryEntry)
-				 + this->pDirectoryHeader->uiNameSize
-				 + this->pDirectoryHeader->uiInfo1Count * sizeof(GCFDirectoryInfo1Entry)
-				 + this->pDirectoryHeader->uiItemCount * sizeof(GCFDirectoryInfo2Entry)
-				 + this->pDirectoryHeader->uiCopyCount * sizeof(GCFDirectoryCopyEntry)
-				 + this->pDirectoryHeader->uiLocalCount * sizeof(GCFDirectoryLocalEntry);*/
+	if (uiVersion > 1)
+	{
+		uiHeaderSize += this->pDirectoryHeader->uiDirectorySize;/*sizeof(GCFDirectoryHeader);
+					 + this->pDirectoryHeader->uiItemCount * sizeof(GCFDirectoryEntry)
+					 + this->pDirectoryHeader->uiNameSize
+					 + this->pDirectoryHeader->uiInfo1Count * sizeof(GCFDirectoryInfo1Entry)
+					 + this->pDirectoryHeader->uiItemCount * sizeof(GCFDirectoryInfo2Entry)
+					 + this->pDirectoryHeader->uiCopyCount * sizeof(GCFDirectoryCopyEntry)
+					 + this->pDirectoryHeader->uiLocalCount * sizeof(GCFDirectoryLocalEntry);*/
+	}
+	else
+	{
+		uiHeaderSize += sizeof(GCFDirectoryHeader)
+			 + this->pDirectoryHeader->uiItemCount * sizeof(GCFDirectoryEntry)
+			 + this->pDirectoryHeader->uiNameSize
+			 + this->pDirectoryHeader->uiInfo1Count * sizeof(GCFDirectoryInfo1Entry)
+			 + this->pDirectoryHeader->uiItemCount * sizeof(GCFDirectoryInfo2Entry)
+			 + this->pDirectoryHeader->uiCopyCount * sizeof(GCFDirectoryCopyEntry)
+			 + this->pDirectoryHeader->uiLocalCount * sizeof(GCFDirectoryLocalEntry);
+	}
 
 	if(uiVersion >= 5)
 	{
@@ -187,13 +200,16 @@ hlBool CGCFFile::MapDataStructures()
 
 	// Checksums.
 
-	if(!this->pMapping->Map(this->pHeaderView, uiHeaderSize, sizeof(GCFChecksumHeader)))
+	if (uiVersion > 1)
 	{
-		return hlFalse;
-	}
-	this->pChecksumHeader = (GCFChecksumHeader *)this->pHeaderView->GetView();
+		if(!this->pMapping->Map(this->pHeaderView, uiHeaderSize, sizeof(GCFChecksumHeader)))
+		{
+			return hlFalse;
+		}
+		this->pChecksumHeader = (GCFChecksumHeader *)this->pHeaderView->GetView();
 
-	uiHeaderSize += sizeof(GCFChecksumHeader) + this->pChecksumHeader->uiChecksumSize;
+		uiHeaderSize += sizeof(GCFChecksumHeader) + this->pChecksumHeader->uiChecksumSize;
+	}
 
 	// Data blocks.
 
@@ -264,7 +280,12 @@ hlBool CGCFFile::MapDataStructures()
 	this->lpDirectoryCopyEntries = (GCFDirectoryCopyEntry *)((hlByte *)this->lpDirectoryInfo2Entries + sizeof(GCFDirectoryInfo2Entry) * this->pDirectoryHeader->uiItemCount);
 	this->lpDirectoryLocalEntries = (GCFDirectoryLocalEntry *)((hlByte *)this->lpDirectoryCopyEntries + sizeof(GCFDirectoryCopyEntry) * this->pDirectoryHeader->uiCopyCount);
 
-	if(uiVersion < 5)
+	if (uiVersion <= 1)
+	{
+		this->pDirectoryMapHeader = 0;
+		this->lpDirectoryMapEntries = (GCFDirectoryMapEntry *)((hlByte *)this->lpDirectoryLocalEntries + sizeof(GCFDirectoryCopyEntry) * this->pDirectoryHeader->uiLocalCount);
+	}
+	else if (uiVersion < 5)
 	{
 		this->pDirectoryMapHeader = 0;
 		this->lpDirectoryMapEntries = (GCFDirectoryMapEntry *)((hlByte *)this->pDirectoryHeader + this->pDirectoryHeader->uiDirectorySize);
@@ -275,16 +296,24 @@ hlBool CGCFFile::MapDataStructures()
 		this->lpDirectoryMapEntries = (GCFDirectoryMapEntry *)((hlByte *)this->pDirectoryMapHeader + sizeof(GCFDirectoryMapHeader));
 	}
 
-	this->pChecksumHeader = (GCFChecksumHeader *)((hlByte *)this->lpDirectoryMapEntries + sizeof(GCFDirectoryMapEntry) * this->pDirectoryHeader->uiItemCount);
-	this->pChecksumMapHeader = (GCFChecksumMapHeader *)((hlByte *)(this->pChecksumHeader) + sizeof(GCFChecksumHeader));
-
-	this->lpChecksumMapEntries = (GCFChecksumMapEntry *)((hlByte *)(this->pChecksumMapHeader) + sizeof(GCFChecksumMapHeader));
-	this->lpChecksumEntries = (GCFChecksumEntry *)((hlByte *)(this->lpChecksumMapEntries) + sizeof(GCFChecksumMapEntry) * this->pChecksumMapHeader->uiItemCount);
-
-	if(uiVersion < 5)
+	if (uiVersion > 1)
 	{
-		// In version 3 the GCFDataBlockHeader is missing the uiLastVersionPlayed field.
-		// The below hack makes the file map correctly.
+		this->pChecksumHeader = (GCFChecksumHeader *)((hlByte *)this->lpDirectoryMapEntries + sizeof(GCFDirectoryMapEntry) * this->pDirectoryHeader->uiItemCount);
+		this->pChecksumMapHeader = (GCFChecksumMapHeader *)((hlByte *)(this->pChecksumHeader) + sizeof(GCFChecksumHeader));
+
+		this->lpChecksumMapEntries = (GCFChecksumMapEntry *)((hlByte *)(this->pChecksumMapHeader) + sizeof(GCFChecksumMapHeader));
+		this->lpChecksumEntries = (GCFChecksumEntry *)((hlByte *)(this->lpChecksumMapEntries) + sizeof(GCFChecksumMapEntry) * this->pChecksumMapHeader->uiItemCount);
+	}
+
+	// In versions 3 and below the GCFDataBlockHeader is missing the uiLastVersionPlayed field.
+	// The below hack makes the file map correctly.
+
+	if (uiVersion <= 1)
+	{
+		this->pDataBlockHeader = (GCFDataBlockHeader *)((hlByte *)this->lpDirectoryMapEntries + sizeof(GCFDirectoryMapEntry) * this->pDirectoryHeader->uiItemCount - sizeof(hlUInt));
+	}
+	else if (uiVersion < 5)
+	{
 		this->pDataBlockHeader = (GCFDataBlockHeader *)((hlByte *)this->pChecksumMapHeader + this->pChecksumHeader->uiChecksumSize - sizeof(hlUInt));
 	}
 	else
